@@ -9,10 +9,7 @@ from dropbox import Dropbox, DropboxOAuth2Flow
 from dropbox.files import DeletedMetadata, FolderMetadata, WriteMode
 from flask import abort, Flask, redirect, render_template, Response, request, session, url_for
 from markdown import markdown
-import redis
-
-redis_url = os.environ['REDISTOGO_URL']
-redis_client = redis.from_url(redis_url, decode_responses=True)
+import pickle
 
 # App key and secret from the App console (dropbox.com/developers/apps)
 APP_KEY = os.environ['APP_KEY']
@@ -57,7 +54,14 @@ def oauth_callback():
     access_token = auth_result.access_token
 
     # Extract and store the access token for this user
-    redis_client.hset('tokens', account, access_token)
+    tokens = {}
+    if os.path.exists("tokens.txt"):
+        with open("tokens.txt", "rb") as tokens_file:
+            tokens = pickle.load(tokens_file)
+    
+    tokens[account] = access_token
+    with open("tokens.txt", "wb") as tokens_file:
+        pickle.dump(tokens, tokens_file)
 
     process_user(account)
 
@@ -66,11 +70,18 @@ def oauth_callback():
 def process_user(account):
     '''Call /files/list_folder for the given user ID and process any changes.'''
 
+    token = None
+    with open("tokens.txt", "rb") as tokens_file:
+        tokens = pickle.load(tokens_file)
+        token = tokens[account]
     # OAuth token for the user
-    token = redis_client.hget('tokens', account)
 
     # cursor for the user (None the first time)
-    cursor = redis_client.hget('cursors', account)
+    cursor = None
+    if os.path.exists("cursors.txt"):
+        with open("cursors.txt", "rb") as cursors_file:
+            cursors = pickle.load(cursors_file)
+            cursor = cursors[account]
 
     dbx = Dropbox(token)
     has_more = True
@@ -95,7 +106,9 @@ def process_user(account):
 
         # Update cursor
         cursor = result.cursor
-        redis_client.hset('cursors', account, cursor)
+        cursors[account] = cursor
+        with open("cursors.txt", "wb") as cursors_file:
+            pickle.dump(cursors, cursors_file)
 
         # Repeat only if there's more to do
         has_more = result.has_more
